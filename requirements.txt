@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+langchain
+langchain-community
+langchain-groq
+langchain-text-splitters
+langchain-chroma
+fastembed
+chromadb
+pypdf
+psycopg2-binary
+redis
+asyncpg
+python-multipart
