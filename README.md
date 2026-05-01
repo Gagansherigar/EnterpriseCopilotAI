@@ -1,4 +1,5 @@
 <b>ENTERPRISE COPILOTE</b>
 
 A all in one tool for companies to manage document queries and access database in natural language.
-currently this is v1 in development.
+currently this is v1 in development. This is a tool in which you can talk to your Database using natural language with in built rag capabalities
+
