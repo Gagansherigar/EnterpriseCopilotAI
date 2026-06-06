@@ -1,99 +1,319 @@
-from langchain_community.embeddings import FastEmbedEmbeddings
+import os
+
+from pathlib import Path
+from backend.tools.context_compression import (
+    compress_context
+)
 from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_groq import ChatGroq
 
+from langchain_community.embeddings import (
+    FastEmbedEmbeddings
+)
 
-llm = ChatGroq(model="llama-3.1-8b-instant")
+from langchain_community.document_loaders import (
+    PyPDFLoader,
+    TextLoader
+)
 
-# ✅ Embeddings
+from langchain_experimental.text_splitter import (
+    SemanticChunker
+)
+
+from backend.state import AgentState
+
+from backend.tools.retrievers import (
+    save_bm25_index,
+    weighted_hybrid_search,
+    rerank_documents
+)
+
+
+# =====================================================
+# LLM
+# =====================================================
+
+llm = ChatGroq(
+    model=os.getenv(
+        "GROQ_MODEL",
+        "llama-3.1-8b-instant"
+    )
+)
+
+
+# =====================================================
+# EMBEDDINGS
+# =====================================================
+
 embeddings = FastEmbedEmbeddings()
 
 
-# ✅ Get vector DB per company (multi-tenant)
-def get_vectordb(company_id: str):
+# =====================================================
+# VECTOR DB
+# =====================================================
+
+def get_vectordb(
+    company_id: str
+):
+
     return Chroma(
         collection_name=f"docs_{company_id}",
         embedding_function=embeddings,
-        persist_directory="/data"
+        persist_directory="./data/chroma"
     )
 
 
-# ✅ Ingest PDF (company-specific)
-def ingest_pdf(file_path: str, company_id: str):
-    try:
-        loader = PyPDFLoader(file_path)
-        docs = loader.load()
+# =====================================================
+# DOCUMENT INGESTION
+# =====================================================
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50
+def ingest_document(
+    file_path: str,
+    company_id: str
+):
+
+    try:
+
+        extension = (
+            Path(file_path)
+            .suffix
+            .lower()
         )
 
-        chunks = splitter.split_documents(docs)
+        # -------------------------
+        # Loader Selection
+        # -------------------------
 
-        vectordb = get_vectordb(company_id)
-        vectordb.add_documents(chunks)
+        if extension == ".pdf":
 
+            loader = PyPDFLoader(
+                file_path
+            )
 
-        return {"status": "success", "chunks": len(chunks)}
+        elif extension in [
+            ".txt",
+            ".md"
+        ]:
+
+            loader = TextLoader(
+                file_path,
+                encoding="utf-8"
+            )
+
+        else:
+
+            return {
+                "status": "error",
+                "message": (
+                    f"Unsupported file type: "
+                    f"{extension}"
+                )
+            }
+
+        docs = loader.load()
+
+        # ==================================================
+        # SEMANTIC CHUNKING
+        # ==================================================
+
+        splitter = SemanticChunker(
+            embeddings,
+            breakpoint_threshold_type="standard_deviation",
+            breakpoint_threshold_amount=1.0
+        )
+
+        chunks = splitter.split_documents(
+            docs
+        )
+
+        # ==================================================
+        # REMOVE TINY CHUNKS
+        # ==================================================
+
+        chunks = [
+            chunk
+            for chunk in chunks
+            if len(
+                chunk.page_content.strip()
+            ) > 100
+        ]
+
+        # ==================================================
+        # CHROMA INDEX
+        # ==================================================
+
+        vectordb = get_vectordb(
+            company_id
+        )
+
+        vectordb.add_documents(
+            chunks
+        )
+
+        # ==================================================
+        # BM25 INDEX
+        # ==================================================
+
+        save_bm25_index(
+            company_id,
+            chunks
+        )
+
+        return {
+            "status": "success",
+            "chunks": len(chunks)
+        }
 
     except Exception as e:
-        return {"error": str(e)}
+
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+# HYBRID RETRIEVAL
 
 
-# ✅ RAG node for agent graph
-async def rag_node(state):
+def hybrid_retrieve(
+    question,
+    company_id,
+    vectordb
+):
+
+    dense_retriever = (
+        vectordb.as_retriever(
+            search_kwargs={"k": 10}
+        )
+    )
+
+    dense_docs = (
+        dense_retriever.invoke(
+            question
+        )
+    )
+
+    hybrid_docs = (
+        weighted_hybrid_search(
+            company_id,
+            question,
+            dense_docs,
+            top_k=20
+        )
+    )
+
+    final_docs = (
+        rerank_documents(
+            question,
+            hybrid_docs,
+            top_k=4
+        )
+    )
+
+    return final_docs
+
+
+
+# RAG NODE
+
+async def rag_node(
+    state: AgentState
+):
+
     try:
-        question = state.get("question", "")
-        company_id = state.get("company_id", "default")
 
-        vectordb = get_vectordb(company_id)
-        retriever = vectordb.as_retriever(search_kwargs={"k": 4})
+        question = state["question"]
 
-        docs = retriever.invoke(question)
+        company_id = state.get(
+            "company_id",
+            "default"
+        )
 
-        # ✅ If nothing found → escalate
+        vectordb = get_vectordb(
+            company_id
+        )
+
+        docs = hybrid_retrieve(
+            question,
+            company_id,
+            vectordb
+        )
+
         if not docs:
-            state["route"] = "escalate"
-            state["answer"] = "I don't have that information. Connecting you to human support."
+
+            state["rag_result"] = {
+                "success": False,
+                "error":
+                "No relevant documents found"
+            }
+
             return state
 
-        context = "\n".join([d.page_content for d in docs])
-
-        # ✅ STRICT PROMPT (very important)
+        context = compress_context(
+            question=question,
+            docs=docs,
+            top_sentences=10
+        )
         prompt = f"""
-        You are an internal company assistant.
+You are an enterprise AI assistant.
 
-        Use previous conversation if relevant.
+Answer ONLY from the provided context.
 
-        Chat History:
-        {state.get("history", "")}
+Question:
+{question}
 
-        Context:
-        {context}
+Context:
+{context}
 
-        Question:
-        {question}
+Rules:
+- Do not hallucinate
+- If answer is not found, say:
+  "Not found in knowledge base"
+- Be concise
+"""
 
-        Rules:
-        - Answer ONLY from context
-        - If not found → say "Not found in knowledge base"
-        """
+        response = await llm.ainvoke(
+            prompt
+        )
 
-        response = await llm.ainvoke(prompt)
+        answer = (
+            response.content.strip()
+        )
 
-        answer = response.content.strip()
+        citations = []
 
-        # ✅ Extra safety (guardrail)
-        if "I don't have that information" in answer:
-            state["route"] = "escalate"
+        for doc in docs:
 
-        state["answer"] = answer
+            citations.append(
+                {
+                    "source":
+                    doc.metadata.get(
+                        "source",
+                        "unknown"
+                    ),
+
+                    "page":
+                    doc.metadata.get(
+                        "page",
+                        "unknown"
+                    )
+                }
+            )
+
+        state["rag_result"] = {
+            "success": True,
+            "answer": answer,
+            "citations": citations
+        }
+
         return state
 
     except Exception as e:
-        state["route"] = "escalate"
-        state["answer"] = f"RAG Error: {str(e)}"
+
+        state["rag_result"] = {
+            "success": False,
+            "error": str(e)
+        }
+
+        state["error"] = str(e)
+
         return state

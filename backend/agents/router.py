@@ -34,13 +34,12 @@ async def router_node(state):
             state["route"] = "sql"
             return state
         SMALL_TALK = ["ok", "okay", "thanks", "thank you", "cool", "nice"]
-
         if state["question"].lower().strip() in SMALL_TALK:
-            return {
-                "route": "direct",
-                "answer": "Glad I could help! Let me know if you need anything else."
-            }
-        # ✅ RULE-BASED FIRST (fast + accurate)
+            state["route"] = "direct"
+            state["answer"] = (
+                "Glad I could help! Let me know if you need anything else."
+            )
+            return state
         if any(word in question for word in [
             "policy", "refund", "delivery", "cancel", "order",
             "payment", "support", "company", "service"

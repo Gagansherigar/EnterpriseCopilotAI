@@ -1,44 +1,108 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from backend.db.models import Base, Employee
-import os
-from sqlalchemy import text
-DATABASE_URL = os.getenv("POSTGRES_URL")
-
-engine = create_async_engine(DATABASE_URL, echo=True)
-
-AsyncSessionLocal = sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False
-)
-
-
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with AsyncSessionLocal() as session:
 
-
         result = await session.execute(
             text("SELECT COUNT(*) FROM employees")
         )
-        count = result.scalar()
 
-        if count == 0:
-            employees = [
-                Employee(name="Amit Sharma", email="amit@company.com", department="Engineering", role="Developer"),
-                Employee(name="Priya Verma", email="priya@company.com", department="HR", role="Manager"),
-                Employee(name="Rahul Singh", email="rahul@company.com", department="Sales", role="Executive"),
-                Employee(name="Neha Gupta", email="neha@company.com", department="Marketing", role="Lead"),
-                Employee(name="Arjun Mehta", email="arjun@company.com", department="Engineering", role="Backend Engineer"),
-                Employee(name="Sneha Reddy", email="sneha@company.com", department="Finance", role="Analyst"),
-                Employee(name="Karan Patel", email="karan@company.com", department="Support", role="Agent"),
-                Employee(name="Anjali Nair", email="anjali@company.com", department="HR", role="Recruiter"),
-            ]
+        if result.scalar() > 0:
+            return
 
-            session.add_all(employees)
-            await session.commit()
+        employees = [
+            Employee(
+                name="Amit Sharma",
+                email="amit@acmeelectronics.com",
+                department="Engineering",
+                role="Senior Backend Engineer"
+            ),
+            Employee(
+                name="Priya Verma",
+                email="priya@acmeelectronics.com",
+                department="HR",
+                role="HR Manager"
+            ),
+            Employee(
+                name="Rahul Singh",
+                email="rahul@acmeelectronics.com",
+                department="Sales",
+                role="Regional Sales Executive"
+            ),
+        ]
 
-            print("✅ Seed data inserted")
+        customers = [
+            Customer(
+                name="RetailCorp",
+                industry="Retail",
+                region="APAC",
+                contract_value=500000
+            ),
+            Customer(
+                name="HealthPlus",
+                industry="Healthcare",
+                region="North America",
+                contract_value=900000
+            ),
+        ]
+
+        products = [
+            Product(
+                name="SmartSensor X",
+                category="IoT"
+            ),
+            Product(
+                name="EdgeGateway Pro",
+                category="Networking"
+            ),
+        ]
+
+        sales = [
+            Sale(
+                product_name="SmartSensor X",
+                region="APAC",
+                quarter="Q1-2026",
+                revenue=420000,
+                units_sold=1200
+            ),
+            Sale(
+                product_name="SmartSensor X",
+                region="APAC",
+                quarter="Q2-2026",
+                revenue=310000,
+                units_sold=850
+            ),
+            Sale(
+                product_name="EdgeGateway Pro",
+                region="APAC",
+                quarter="Q2-2026",
+                revenue=190000,
+                units_sold=420
+            ),
+        ]
+
+        tickets = [
+            SupportTicket(
+                customer_name="RetailCorp",
+                issue_type="Shipment Delay",
+                priority="High",
+                status="Open"
+            ),
+            SupportTicket(
+                customer_name="RetailCorp",
+                issue_type="Device Failure",
+                priority="Medium",
+                status="Closed"
+            ),
+        ]
+
+        session.add_all(employees)
+        session.add_all(customers)
+        session.add_all(products)
+        session.add_all(sales)
+        session.add_all(tickets)
+
+        await session.commit()
+
+        print("✅ Enterprise seed data inserted")
