@@ -12,3 +12,7 @@ psycopg2-binary
 redis
 asyncpg
 python-multipart
+langchain-experimental
+rank-bm25
+langsmith
+sentence-transformers
